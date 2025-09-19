@@ -140,6 +140,14 @@ st.markdown("""
     .main-content {
         min-height: 600px;
     }
+    .api-warning {
+        background: linear-gradient(135deg, #ff6b6b, #ee5a52);
+        padding: 1rem;
+        border-radius: 10px;
+        color: white;
+        text-align: center;
+        margin: 1rem 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -162,18 +170,33 @@ class StressAssistant:
         self.sentiment_analysis = pipeline("sentiment-analysis", 
                                          model=self.model, tokenizer=self.tokenizer)
         
-        # Set up Groq client
-        os.environ['GROQ_API_KEY'] = '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'
+        # Set up Groq client - using environment variable or Streamlit secrets
         self.client = None
+        self._setup_groq_client()
     
-    def setup_groq_client(self):
-        """Initialize Groq client"""
+    def _setup_groq_client(self):
+        """Initialize Groq client using environment variable or Streamlit secrets"""
         try:
+            # Try Streamlit secrets first, then environment variable
+            api_key = None
+            if hasattr(st, 'secrets') and st.secrets and 'GROQ_API_KEY' in st.secrets:
+                api_key = st.secrets['GROQ_API_KEY']
+            else:
+                api_key = os.getenv('GROQ_API_KEY')
+            
+            if not api_key:
+                # Don't show error on GitHub - just disable AI features gracefully
+                st.sidebar.warning("🤖 AI Assistant: Setup Required")
+                st.sidebar.info("Set `GROQ_API_KEY` environment variable for AI recommendations")
+                return False
+            
             from groq import Client
-            self.client = Client()
+            self.client = Client(api_key=api_key)
+            st.sidebar.success("🤖 AI Assistant: Connected ✓")
             return True
+            
         except Exception as e:
-            st.error(f"Failed to initialize Groq client: {e}")
+            st.sidebar.error(f"🤖 AI Setup Error: {str(e)[:50]}...")
             return False
     
     def record_audio(self, duration):
@@ -248,10 +271,17 @@ class StressAssistant:
             return "NEUTRAL", 0.5
     
     def get_recommendation(self, text, sentiment):
-        """Get personalized recommendation from LLM"""
+        """Get personalized recommendation from LLM or fallback suggestion"""
         if not self.client:
-            if not self.setup_groq_client():
-                return "Unable to generate recommendation at this time. Please try again later."
+            # Graceful fallback when AI is not available
+            fallback_suggestions = [
+                """🌿 **Quick Stress Relief**: It sounds like you're carrying a lot right now. Try this simple breathing exercise: **Inhale for 4 seconds, hold for 4, exhale for 6.** Repeat 3 times. You're doing great just by taking this moment for yourself! 💚""",
+                """🌈 **Gentle Reminder**: It's completely normal to feel overwhelmed sometimes. Try writing down 3 things you're grateful for, no matter how small. This simple practice can shift your perspective. You're stronger than you think! 🌟""",
+                """💧 **Self-Care Moment**: Take a slow sip of water and stretch your arms above your head. Sometimes our body just needs a small reminder that we're here and safe. You've got this! 🫂""",
+                """☀️ **Nature Break**: Step outside for 2 minutes if you can, or just look out a window. Notice one thing you can see, hear, or feel. Connecting with your senses can ground you. You're doing important work! 🌱"""
+            ]
+            import random
+            return random.choice(fallback_suggestions)
         
         try:
             system_prompt = f"""
@@ -280,8 +310,15 @@ class StressAssistant:
             return llm_response.choices[0].message.content.strip()
             
         except Exception as e:
-            st.error(f"Failed to generate recommendation: {e}")
-            return "Take a deep breath and remember that it's okay to feel this way. Try going for a short walk to clear your mind."
+            st.error(f"Failed to generate AI recommendation: {e}")
+            # Fallback to random suggestion
+            fallback_suggestions = [
+                "Take a deep breath and remember that it's okay to feel this way. Try going for a short walk to clear your mind.",
+                "You're doing great just by acknowledging how you feel. Try placing a hand on your heart and taking 3 slow breaths.",
+                "It's normal to have tough moments. Give yourself permission to pause and do one small thing that brings you comfort."
+            ]
+            import random
+            return random.choice(fallback_suggestions)
 
 def main():
     # Initialize the assistant
@@ -301,6 +338,8 @@ def main():
         st.session_state.recommendation = None
     if 'sentiment' not in st.session_state:
         st.session_state.sentiment = None
+    if 'confidence' not in st.session_state:
+        st.session_state.confidence = None
     
     # Sidebar with instructions
     with st.sidebar:
@@ -325,16 +364,20 @@ def main():
         - 💬 Personalized stress relief recommendation
         - 🔊 Spoken recommendation in calming voice
         - 📝 Quick feedback opportunity
+        
+        ### 🔧 **Setup for AI Features:**
+        Set `GROQ_API_KEY` environment variable for personalized AI recommendations
         """)
         
         st.markdown("---")
         st.markdown("### ℹ️ **Privacy Notice**")
         st.info("""
-        - Your audio is processed locally and not stored
-        - Transcriptions are only used for analysis
-        - No personal data is collected
-        - Delete audio files manually if needed
-        - Feedback is anonymous and helps improve the system
+        🔒 **Your Privacy Matters:**
+        - Audio processed locally, not stored
+        - Transcriptions used only for analysis
+        - No personal data collected
+        - All processing happens in-browser
+        - Feedback is anonymous
         """)
     
     # Main content - Use tabs for better organization
@@ -368,6 +411,7 @@ def main():
                         # Analyze sentiment
                         sentiment, confidence = assistant.analyze_sentiment(transcribed_text)
                         st.session_state.sentiment = sentiment
+                        st.session_state.confidence = confidence
                         
                         # Get recommendation
                         with st.spinner("🤔 Generating personalized recommendation..."):
@@ -402,6 +446,8 @@ def main():
             if st.session_state.sentiment:
                 sentiment_emoji = "😊" if st.session_state.sentiment == "POSITIVE" else "😔" if st.session_state.sentiment == "NEGATIVE" else "😐"
                 sentiment_color_class = "sentiment-positive" if st.session_state.sentiment == "POSITIVE" else "sentiment-negative"
+                
+                confidence = st.session_state.confidence if st.session_state.confidence else 0.5
                 
                 st.markdown(f"""
                 <div class="{sentiment_color_class}">
@@ -461,7 +507,7 @@ def main():
             with col1:
                 if st.button("🔄 New Session", use_container_width=True):
                     # Reset session
-                    for key in ['session_completed', 'transcribed_text', 'recommendation', 'sentiment']:
+                    for key in ['session_completed', 'transcribed_text', 'recommendation', 'sentiment', 'confidence']:
                         st.session_state[key] = None if key != 'session_completed' else False
                     st.rerun()
             
@@ -547,6 +593,7 @@ def main():
         st.success("💚 You're doing important work by caring for your mental wellness!")
     
     # Footer
-  
+    
+
 if __name__ == "__main__":
     main()
